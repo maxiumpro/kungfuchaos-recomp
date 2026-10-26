@@ -37,6 +37,12 @@ Addresses are from the NTSC-U `default.xbe`.
    still alive in the heap, and the APU played those bytes on every turn of the ring: a sharp noise every
    600 ms on character select. The allocator now skips such pages. Without: noise in 2 of 5 runs, a "named"
    page in the voice's ring; with: 0 of 3. `RECOMP_CONTIG_AVOID_NAMED=0` turns it off.
+   That covered one order only. The other order also happens: a heap page is named while the arena
+   already holds the same number live, and the APU then reads the heap page for both. Such a heap page
+   now gets a free window number of its own, an alias reserved until the heap frees it
+   (`xbox_PhysNameRam`; the APU and the NV2A resolve aliases first). Reload runs (120 s, WAV captured):
+   before, a collision in 4 of 4 and the noise in 1; after, a collision in 8 of 8, all aliased, the
+   noise in 0. `RECOMP_PHYS_ALIAS=0` turns it off.
 8. **`KeSetBasePriorityThread` / `KeQueryBasePriorityThread`** (`kernel_bridge.c`) passed the thread
    object's guest address on as a Windows `HANDLE`, so no title's thread priority was ever applied. Now the
    object is mapped to its host thread (`bridge_thread_host`).
