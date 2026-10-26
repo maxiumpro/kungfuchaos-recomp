@@ -2,7 +2,8 @@
 
 Everything Kung Fu Chaos needed beyond the stock toolkit, with the evidence for each. Toolkit changes
 live on the `kungfuchaos` branch of the D3D11 fork (see the README); the one game patch is in
-`patches/`. Each change has an environment switch that turns it off, named in its entry.
+`patches/`. Most changes have an environment switch that turns them off, named in their entry;
+the thread-priority fix and the present-selection rules do not (they correct a mapping, not a choice).
 
 Addresses are from the NTSC-U `default.xbe`.
 

@@ -82,40 +82,56 @@ def find_file(fn):
     sys.exit('apply.py: %s not found in %s' % (fn, GEN))
 
 
+def state(t, edits):
+    """'patched' when every patched text is in body t, 'unpatched' when none is and every
+    original is there exactly once, else 'inconsistent'. (A patched text can contain its
+    original, so the originals alone do not tell.)"""
+    if all(new in t for _, new in edits):
+        return 'patched'
+    if all(new not in t and t.count(old) == 1 for old, new in edits):
+        return 'unpatched'
+    return 'inconsistent'
+
+
 def main():
     files = {}
     for fn, _ in PATCHES:
         files.setdefault(find_file(fn), []).append(fn)
     p0 = find_file('sub_000C6E30')
+    out = {}   # path -> (crlf, new text); nothing is written until every file checks out
     for p, fns in files.items():
         raw = open(p, 'rb').read()
         crlf = b'\r\n' in raw
         s = raw.decode('utf-8').replace('\r\n', '\n')
-        if 'kfc_progressive' in s:
+        states = {}
+        for fn, edits in PATCHES:
+            if fn in fns:
+                a, b = body(s, fn)
+                states[fn] = state(s[a:b], edits)
+        helper = HELPER in s
+        if all(v == 'patched' for v in states.values()) and helper:
             print('already patched:', os.path.basename(p))
             continue
+        bad = [fn for fn, v in states.items() if v != 'unpatched']
+        if bad or helper:
+            sys.exit('apply.py: %s is partly patched or not what this script expects (%s); '
+                     'regenerate it with regen.sh' % (os.path.basename(p), ', '.join(bad) or 'helper'))
         for fn, edits in PATCHES:
             if fn not in fns:
                 continue
             a, b = body(s, fn)
             t = s[a:b]
             for old, new in edits:
-                if t.count(old) != 1:
-                    sys.exit('apply.py: in %s, not found (or found more than once): %r' % (fn, old.strip()))
                 t = t.replace(old, new, 1)
             s = s[:a] + t + s[b:]
-        if p == p0:
-            # The helper goes before its first user, which also covers sub_000C7070 in the same file.
-            a, _ = body(s, 'sub_000C6E30')
-            k = s.rfind('\n/**', 0, a)   # the function's header comment
-            s = s[:k + 1] + HELPER + s[k + 1:]
-            s = s.replace('#include "recomp_funcs.h"\n', '#include "recomp_funcs.h"\n#include <stdlib.h>   /* KFC patch */\n', 1)
-        else:
-            # sub_000C7070 is in another file: it needs its own copy of the helper.
-            a, _ = body(s, 'sub_000C7070')
-            k = s.rfind('\n/**', 0, a)
-            s = s[:k + 1] + HELPER + s[k + 1:]
-            s = s.replace('#include "recomp_funcs.h"\n', '#include "recomp_funcs.h"\n#include <stdlib.h>   /* KFC patch */\n', 1)
+        # The helper goes before the first function that uses it in this file: sub_000C6E30's
+        # file has both when they share one; otherwise sub_000C7070's file gets its own copy.
+        a, _ = body(s, 'sub_000C6E30' if p == p0 else 'sub_000C7070')
+        k = s.rfind('\n/**', 0, a)   # the function's header comment
+        s = s[:k + 1] + HELPER + s[k + 1:]
+        s = s.replace('#include "recomp_funcs.h"\n', '#include "recomp_funcs.h"\n#include <stdlib.h>   /* KFC patch */\n', 1)
+        out[p] = (crlf, s, fns)
+    for p, (crlf, s, fns) in out.items():
         if crlf:
             s = s.replace('\n', '\r\n')
         open(p, 'wb').write(s.encode('utf-8'))

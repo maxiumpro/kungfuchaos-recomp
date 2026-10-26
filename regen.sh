@@ -33,6 +33,10 @@ PYTHON="${PYTHON:-python}"
 OUT="$KFC/build/xr"
 GEN="$KFC/src/recomp/gen"
 
+# Absolute paths: the toolkit steps run from inside the toolkit checkouts.
+[[ -d "$GAME" ]] && GAME="$(cd "$GAME" && pwd)" && XBE="$GAME/default.xbe"
+[[ -d "$XBOXRECOMP" ]] && XBOXRECOMP="$(cd "$XBOXRECOMP" && pwd)"
+[[ -d "$XBOXRECOMP_APEX" ]] && XBOXRECOMP_APEX="$(cd "$XBOXRECOMP_APEX" && pwd)"
 if [[ ! -f "$XBE" ]]; then
     echo "default.xbe not found at $XBE"
     echo "Copy your own Kung Fu Chaos (NTSC-U) disc contents to game/Kung Fu Chaos, or set GAME."
