@@ -14,11 +14,12 @@ Copy-Item "$build\kfc_recomp.exe" $Out -Force
 # The Visual C++ runtime beside the executable: the other PC may not have it installed.
 Copy-Item "$env:WINDIR\System32\vcruntime140.dll", "$env:WINDIR\System32\vcruntime140_1.dll" $Out -Force
 robocopy $game "$Out\game\Kung Fu Chaos" /E /NFL /NDL /NJH /NJS /NP | Out-Null
-# What a run creates, not the package: the emulated hard disk (Partition*.img, ~5 GB, made on first
-# start, with the saves), the shader cache, the logs and the launcher's settings.
-Get-ChildItem "$Out\hdd" -Force | Remove-Item -Recurse -Force
+# What a run creates, not the package: the emulated disk's partition images (Partition*.img, ~5 GB, made
+# again on the next start), the shader cache and the logs. Saves (hdd\TDATA, hdd\UDATA) and the launcher's
+# settings stay: a package that is also played in place keeps its progress.
+Get-ChildItem "$Out\hdd" -Filter 'Partition*.img' -Force | Remove-Item -Force
 Remove-Item "$Out\shadercache" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item "$Out\log.txt", "$Out\xbox_kernel.log", "$Out\KFCLauncher.ini", "$Out\audio.wav" -ErrorAction SilentlyContinue
+Remove-Item "$Out\log.txt", "$Out\xbox_kernel.log", "$Out\audio.wav" -ErrorAction SilentlyContinue
 @'
 Kung Fu Chaos - native recompilation (xboxrecomp + D3D11 backend)
 
