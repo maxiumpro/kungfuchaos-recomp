@@ -1,0 +1,32 @@
+# Your game data: your own copy of the disc. Never committed.
+game/
+*.iso
+*.xiso
+*.xbe
+
+# Generated from default.xbe by regen.sh. Never committed: the tool ships,
+# the output doesn't.
+src/recomp/gen/
+
+# Build output, packages
+build/
+package/
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+
+# Runtime state: emulated hard disk (saves), shader cache, logs, captures
+hdd/
+shadercache/
+*.log
+log.txt
+*.wav
+KFCLauncher.ini
+
+# Launcher art made from your own screenshots (launcher/README.md)
+launcher/assets/
+launcher/banner.png
+launcher/icon.ico
