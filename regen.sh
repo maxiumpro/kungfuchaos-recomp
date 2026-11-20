@@ -64,6 +64,6 @@ rm -rf "$GEN"
 grep -E "functions \(|unimplemented|unresolved" "$OUT/recomp.log" || true
 
 echo "== patches"
-"$PYTHON" "$KFC/patches/apply.py" "$GEN"
+"$PYTHON" "$KFC/patches/apply.py" "$GEN" --kick-wait --ohci-direct   # both needed by the kfc-v2 toolkit
 
 echo "== done: build with build.bat"

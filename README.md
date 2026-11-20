@@ -45,7 +45,7 @@ build.bat             # build\kfc_recomp.exe
 The `kfc-v2` branch is apexJCL's `blinx2/portability` plus this port's toolkit fixes, while they are
 proposed upstream. It is the previous `kungfuchaos` branch plus this week's fixes (early-Z for W depth, the
 background-blur switch, the 300-frame hitch, the doubled background, the Metal backend's additions).
-It needs the patches' optional flags: `python patches/apply.py src/recomp/gen --kick-wait --ohci-direct`.
+`regen.sh` applies the patches with the two flags the `kfc-v2` toolkit needs (`--kick-wait --ohci-direct`); by hand: `python patches/apply.py src/recomp/gen --kick-wait --ohci-direct`.
 
 ## Play
 
