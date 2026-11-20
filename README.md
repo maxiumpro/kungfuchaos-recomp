@@ -35,15 +35,17 @@ the end of that file.
 ```bash
 # next to this repository:
 git clone https://github.com/sp00nznet/xboxrecomp.git                  # disassembler (tested at f0f8a46)
-git clone -b kungfuchaos https://github.com/maxiumpro/xboxrecomp.git xboxrecomp-apex   # D3D11 runtime + lifter
+git clone -b kfc-v2 https://github.com/maxiumpro/xboxrecomp.git xboxrecomp-apex   # D3D11 runtime + lifter
 cd kungfuchaos-recomp
 ./regen.sh            # writes src/recomp/gen from game/Kung Fu Chaos/default.xbe and applies patches/
 build.bat             # build\kfc_recomp.exe
 ```
 
 `regen.sh` reads `GAME`, `XBOXRECOMP`, `XBOXRECOMP_APEX` and `PYTHON` if your layout differs.
-The `kungfuchaos` branch is apexJCL's `blinx2/portability` plus this port's toolkit fixes, while they are
-proposed upstream.
+The `kfc-v2` branch is apexJCL's `blinx2/portability` plus this port's toolkit fixes, while they are
+proposed upstream. It is the previous `kungfuchaos` branch plus this week's fixes (early-Z for W depth, the
+background-blur switch, the 300-frame hitch, the doubled background, the Metal backend's additions).
+It needs the patches' optional flags: `python patches/apply.py src/recomp/gen --kick-wait --ohci-direct`.
 
 ## Play
 
@@ -63,9 +65,19 @@ away with the saved ones. `tools\make-package.ps1` makes a portable folder for a
 | Progressive matches | 480 lines instead of the console's fields (on by default) |
 | CPU threads, frame pacing, low latency | |
 | Controllers, first player, keyboard, vibration | Up to four XInput pads |
+| Post-processing | None, FSR (sharp upscale), CRT, or CRT light |
+| Background blur | Off (sharp background, the default) or Original (as on the console) |
 
 The launcher's banner and icon are made from your own screenshots if you put them in
 `launcher\assets\` (see `build-launcher.ps1`); otherwise it shows a plain title.
+
+## Mac (Apple Silicon)
+
+The backend there is Metal. The launcher is in `launcher-mac/` (a SwiftUI app; see its README). The kfc-v2
+toolkit also carries a reader for wired Xbox One controllers that SDL does not see on macOS (Hyperkin and
+similar ones, the GIP protocol through IOKit; `RECOMP_GIP=0` turns it off); it has not been tried yet with
+the controller in hand. The early-Z path for W depth is written and compiles in Metal, but is unverified on a
+Mac (the D3D11 measurement did pass).
 
 ## Credits
 
@@ -76,5 +88,6 @@ The launcher's banner and icon are made from your own screenshots if you put the
 ## License
 
 MIT for what is in this repository (see LICENSE). Kung Fu Chaos and its contents belong to their owners;
-none of it is included or needed here beyond your own copy. Not affiliated with Microsoft or
-Just Add Monsters.
+none of it is included or needed here beyond your own copy. Not affiliated with Microsoft, Xbox or
+Just Add Monsters, or with the game's owners: this repository has only original code, and each person uses
+their own legal copy of the game.

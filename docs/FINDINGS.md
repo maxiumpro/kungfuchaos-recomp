@@ -123,6 +123,39 @@ Addresses are from the NTSC-U `default.xbe`.
     modchip's (XboxHD+, undocumented). See `patches/README.md`. Checked: match, HUD, fog, pause, back out with
     B and reload, quit to menu, character select, 60 FPS.
 
+## Later fixes
+
+Numbers follow the project's own list; the ones not repeated here concern private tooling.
+
+38. **HUD that shook** (game patch, `patches/apply.py`). Measured on 12 consecutive in-match frames with a
+    sub-pixel search: the portrait rings moved up and down by about 0.25 game pixels every other frame (more
+    at 3x, still there at 1x). Negative control: 0, 0.5 and 1 px planted offsets measure exact. It was not the
+    backend: a probe on `SET_VIEWPORT_OFFSET` showed a constant y. Cause: besides `sub_000C7070`, the game reads
+    the field parity (device + 0x1990) in `sub_0002A0F0` (resource +0x3C vs +0x40) and `sub_0002CB00` (+0xC vs
+    +0x10). Progressive now always takes the no-fields branch in both. After: 0.0 px over the 36 frames
+    measured; a fight through to the results screen without errors.
+45. **Hitch every 300 frames** (D3D11 and Metal backends): the `present #N` totals block was costing the frame
+    it landed on a long stall, every 300th. It now prints only with the `present_stats` trace. After: none of
+    the 300n frames measured in a fight stands out. Printing long blocks to the log is expensive in general.
+46. **Doubled background (depth of field)** (`RECOMP_RENDER_NATIVE_TARGETS`): the game copies the scene to
+    320x240, blurs it and lays it back with offset taps. Scaled, that copy stayed sharp and the far city showed
+    ghost copies. Render targets of the listed sizes now stay at 1x; `src/main.c` sets it to `320x240` by
+    default. Result: an even blur as on the console, a sharp foreground.
+51. **W depth with early-Z** (`RECOMP_W_EARLYZ`, on by default in `src/main.c`). The W-depth shader wrote
+    `SV_Depth`, which turns early-Z / HiZ off. Now the buffer stores E = B (1/w - 1/zmax) from the vertex
+    shader (exact per pixel); inverted tests, clears and the fog's depth read encode and decode it; a plain z
+    draw turns the mode off at the next clear. Audit: every draw with depth is W-buffered, and only LEQUAL and
+    ALWAYS are used. Parity within one run (`RECOMP_W_EARLYZ_ALT=1` alternates the mode per frame; separate
+    runs differ by 85% even with a virtual clock): alternating adds no difference beyond motion, and a
+    negative control (B = 1e6) differs 67-81%. Fog: thousands of reads, no occlusion artifacts; the control
+    `RECOMP_D3D11_ZTEX=0` makes it opaque when falling off the cymbal stage. Gap: a fall in the new mode was
+    not captured. On a mini PC (Ryzen 7 7730U, Vega 8) at 2560x1920 the median frame goes from 19.5 ms to
+    16.7 ms and holds 60 FPS. The Metal version is written and compiles, but is unverified on a Mac.
+52. **Background blur switch** (`RECOMP_DOF_SKIP=320x240,64x64`): skips the draws to the screen that read the
+    small copies (320x240, 64x64) with a depth test and no depth write (the blurry repaint); the
+    full-screen passes without a test (tint) stay. The launchers' "Background blur" option is Off (sharp
+    background) by default, or Original (as on the console).
+
 ## Checked
 
 Unattended runs (a pad script through `RECOMP_PAD_LIVE`): Battle Game (free for all, 3 CPU players, 4 HUDs),

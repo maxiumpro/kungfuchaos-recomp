@@ -744,6 +744,12 @@ static int host_main(void)
 
     /* Step 3: Initialize Xbox memory layout */
     printf("Initializing Xbox memory layout...\n");
+    /* More guest addresses for the heap, not more RAM: the title is still told
+     * 64 MB. The console pages its memory, so scattered free pages still make
+     * one block; this heap needs them contiguous. In Adventure, after two
+     * levels a 3.7 MB request found 9 MB free but at most 3.4 MB in one piece,
+     * and the title crashed on the null pointer. */
+    xbox_SetMapSize(XBOX_DEVKIT_RAM);
     if (!xbox_MemoryLayoutInit(xbe_data, xbe_size)) {
         host_report_fatal("memory layout",
                           "Failed to initialize Xbox memory layout.\n"
@@ -956,6 +962,58 @@ static BOOL load_xbe(const char *path, void **out_data, size_t *out_size)
  * A game's own keys (enhance_cfg_bind_env, enhance_cfg_choice, ...) are read
  * between the two calls, so a file that sets one is not told the key is
  * unknown. */
+/* The one-CPU DISPATCH gate, on unless the environment says otherwise.
+ *
+ * Toolkit v0.15 made it opt-in (RECOMP_DISPATCH_GATE, default off); the
+ * toolkit this port was brought up on always had it. DirectSound needs it:
+ * its DPC (0x00252A27 -> 0x002523BA) pops finished voices off the list at
+ * +0x6D8 of its core object, guarded only by the counter at +0x2BC, and its
+ * APU ISR (0x00252C07 -> ... -> 0x002524CD -> 0x0025421D) appends to that
+ * list when the counter reads zero. On the console the ISR never runs while
+ * the DPC does; without the gate the timer thread runs the DPC and the APU
+ * thread the ISR at the same time, the list tears, and the DPC calls slot 5
+ * of something that is not a voice; that method reads its `this` from the
+ * stack and gets the KeSynchronizeExecution thunk's VA (crash under
+ * 0x0025242C, fault at 0xFE0001A0). RECOMP_DISPATCH_GATE=0 still turns it
+ * off.
+ *
+ * File I/O APCs run at the issuing thread's next alertable wait, as the
+ * kernel does. v0.15 made that opt-in too (RECOMP_FILE_APC_DEFER, default
+ * inline); the toolkit the shipped Windows build uses defers by default, so
+ * this keeps the two the same. RECOMP_FILE_APC_DEFER=0 restores inline.
+ *
+ * Flip pacing (hold after a flip until the guest vblank reaches the swap's
+ * interval) was on by default before v0.15 as well, and every run this port
+ * was tested with had it. RECOMP_FLIP_PACING=0 turns it off. */
+static void host_game_env_defaults(void)
+{
+    if (!recomp_env(RENV_DISPATCH_GATE))
+        recomp_env_set(RENV_DISPATCH_GATE, "1");
+    if (!recomp_env(RENV_FILE_APC_DEFER))
+        recomp_env_set(RENV_FILE_APC_DEFER, "1");
+    if (!recomp_env(RENV_FLIP_PACING))
+        recomp_env_set(RENV_FLIP_PACING, "1");
+    /* The walker sleeps between KickOffs and the title wakes it (kick_event).
+     * Needs the generated code patched by patches/apply.py --kick-wait:
+     * the KickOff flush spin and the two PUT stores poke. Without the patch
+     * the walker sees three unpoked kicks and polls as before.
+     * RECOMP_DEBUG=kick_event=0 turns it off. */
+    if (!recomp_env(RENV_KICK_EVENT))
+        recomp_env_set(RENV_KICK_EVENT, "1");
+    /* The depth of field copies the scene to 320x240, blurs it and lays it
+     * back with offset taps. Scaled, that copy stays sharp and the taps show
+     * as ghost copies of the far city (19-nov); at 1x it blurs as on the
+     * console. RECOMP_RENDER_NATIVE_TARGETS= (empty) scales it again. */
+    if (!recomp_env(RENV_RENDER_NATIVE_TARGETS))
+        recomp_env_set(RENV_RENDER_NATIVE_TARGETS, "320x240");
+    /* Every depth draw is W-buffered (present_stats: 0 plain z), so the
+     * buffer can store E = B (1/w - 1/zmax) and keep early-Z: the W shader's
+     * SV_Depth gave up early-Z.
+     * RECOMP_W_EARLYZ=0 is the per-pixel W depth as before. */
+    if (!recomp_env(RENV_W_EARLYZ))
+        recomp_env_set(RENV_W_EARLYZ, "1");
+}
+
 static void host_enhance_init(void)
 {
 #ifdef RECOMP_ENV_HAVE_ENHANCE_KEYS
@@ -975,6 +1033,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     (void)lpCmdLine;
     (void)nCmdShow;
     recomp_env_init();   /* the environment, read once, before any thread */
+    host_game_env_defaults();
     host_stdio_setup();
     host_enhance_init();
     xbox_log_thread_role("process-main", 0);
@@ -996,6 +1055,7 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
     recomp_env_init();   /* the environment, read once, before any thread */
+    host_game_env_defaults();
     host_stdio_setup();
     host_enhance_init();
     /* The initial thread, named first: the toolkit leaves its OS name alone

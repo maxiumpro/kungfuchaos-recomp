@@ -10,15 +10,30 @@ if (-not (Test-Path "$build\kfc_recomp.exe")) { throw "build\kfc_recomp.exe not 
 if (-not (Test-Path "$game\default.xbe")) { throw "game\Kung Fu Chaos\default.xbe not found" }
 New-Item -ItemType Directory -Force "$Out\game", "$Out\hdd" | Out-Null
 Copy-Item "$build\kfc_recomp.exe" $Out -Force
+if (Test-Path "$build\kfc_recomp.pdb") { Copy-Item "$build\kfc_recomp.pdb" $Out -Force }   # a Release build does not make one
 & (Join-Path $root 'launcher\build-launcher.ps1') -Out $Out | Out-Null
 # The Visual C++ runtime beside the executable: the other PC may not have it installed.
 Copy-Item "$env:WINDIR\System32\vcruntime140.dll", "$env:WINDIR\System32\vcruntime140_1.dll" $Out -Force
+# The shader compiler beside the executable (Windows loads it before the System32 one): the package's DXBC
+# cache is keyed by the DLL's size and version, so this makes it valid on any PC.
+Copy-Item "$env:WINDIR\System32\d3dcompiler_47.dll" $Out -Force
+# The launcher's post-processing (FSR / CRT): librashader and its presets go beside the executable.
+if (Test-Path "$build\librashader.dll") {
+    Copy-Item "$build\librashader.dll" $Out -Force
+    robocopy "$build\shaders" "$Out\shaders" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+}
+# Performance test without hands (the Championship route, by configuration -> performance.txt).
+Copy-Item (Join-Path $PSScriptRoot 'benchmark.ps1') $Out -Force
 robocopy $game "$Out\game\Kung Fu Chaos" /E /NFL /NDL /NJH /NJS /NP | Out-Null
 # What a run creates, not the package: the emulated disk's partition images (Partition*.img, ~5 GB, made
-# again on the next start), the shader cache and the logs. Saves (hdd\TDATA, hdd\UDATA) and the launcher's
-# settings stay: a package that is also played in place keeps its progress.
+# again on the next start) and the logs. Saves (hdd\TDATA, hdd\UDATA) and the launcher's settings stay: a
+# package that is also played in place keeps its progress.
 Get-ChildItem "$Out\hdd" -Filter 'Partition*.img' -Force | Remove-Item -Force
-Remove-Item "$Out\shadercache" -Recurse -Force -ErrorAction SilentlyContinue
+# The build's shader cache does go, if it has one: with it warm, the first start on another PC does not
+# stall compiling. It adds to whatever the package already has.
+if (Test-Path "$build\shadercache") {
+    robocopy "$build\shadercache" "$Out\shadercache" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+}
 Remove-Item "$Out\log.txt", "$Out\xbox_kernel.log", "$Out\audio.wav" -ErrorAction SilentlyContinue
 @'
 Kung Fu Chaos - native recompilation (xboxrecomp + D3D11 backend)

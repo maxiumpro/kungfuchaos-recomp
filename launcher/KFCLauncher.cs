@@ -34,7 +34,7 @@ namespace KFCLauncher
             { "movie", "black" }, { "filter", "linear" }, { "overscan", "0" }, { "vsync", "0" },
             { "aniso", "16" }, { "progressive", "1" }, { "deinterlace", "1" }, { "cpu", "all" },
             { "pacing", "sleep" }, { "player", "1" }, { "keyboard", "1" },
-            { "lowlat", "1" }, { "rumble", "1" }, { "fps", "60" }, { "pads", "4" },
+            { "lowlat", "1" }, { "rumble", "1" }, { "fps", "60" }, { "pads", "4" }, { "post", "none" }, { "dof", "off" },
         };
 
         public Settings(string path)
@@ -123,6 +123,10 @@ namespace KFCLauncher
                 new Choice("Smooth", "linear"), new Choice("Sharp pixels", "nearest"), new Choice("Integer (pixel perfect)", "integer"));
             Combo(body, "overscan", "Overscan crop", "Crops the edges, as an old TV did.",
                 new Choice("None", "0"), new Choice("Small", "8"), new Choice("Medium", "16"), new Choice("Large", "32"));
+            Combo(body, "post", "Post-processing", "FSR: AMD's sharp upscaler, best with a lower internal resolution than the window. "
+                + "CRT: the look of an old tube TV (scanlines, phosphor glow).",
+                new Choice("None", "none"), new Choice("FSR (sharp upscale)", "fsr"),
+                new Choice("CRT (tube TV)", "crt-lottes"), new Choice("CRT light (faster)", "crt-lottes-fast"));
             Check(body, "vsync", "VSync", "Waits for the monitor's refresh: no tearing, a little more input lag.");
 
             Section(body, "GRAPHICS");
@@ -131,6 +135,9 @@ namespace KFCLauncher
             Check(body, "progressive", "Progressive matches (480 lines)", "Matches drawn as full 640x480 frames. Off: the console's 480i fields, half the lines, which flicker.");
             deintLabel = Combo(body, "deinterlace", "Deinterlacing", "Only with progressive matches off: how the console's fields are shown.",
                 new Choice("Adaptive", "1"), new Choice("Blend", "blend"), new Choice("Off (one field)", "0"));
+            Combo(body, "dof", "Background blur", "The game blurs the far scene behind the fighters (depth of field) by repainting it. "
+                + "Off skips that repaint, so the background stays sharp; the rest of the picture is unchanged.",
+                new Choice("Original (as on console)", "original"), new Choice("Off (sharp background)", "off"));
 
             Section(body, "PERFORMANCE");
             Combo(body, "fps", "Frame rate", "The game times itself, so it runs at normal speed at any rate; higher is smoother. "
@@ -339,18 +346,23 @@ namespace KFCLauncher
             env["RECOMP_DISPLAY_MOVIE"] = v["movie"];
             env["RECOMP_DISPLAY_OVERSCAN"] = v["overscan"];
             env["RECOMP_PRESENT_FILTER"] = v["filter"];
+            env["RECOMP_PRESENT_SHADER"] = v["post"];   // librashader preset next to the exe (shaders\)
             env["RECOMP_PRESENT_FULLSCREEN"] = v["window"] == "fullscreen" ? "1" : "0";
             env["RECOMP_PRESENT_PACING"] = v["pacing"];
             env["RECOMP_PRESENT_VSYNC"] = v["vsync"];
             env["RECOMP_KFC_PROGRESSIVE"] = v["progressive"];
             env["RECOMP_FIELD_DEINTERLACE"] = v["deinterlace"];
             env["RECOMP_D3D11_LOW_LATENCY"] = v["lowlat"];
+            if (v["dof"] == "off") env["RECOMP_DOF_SKIP"] = "320x240,64x64";   // the blur's two copies (no value: as the console)
             env["RECOMP_RUMBLE"] = v["rumble"];
             env["RECOMP_VBLANK_HZ"] = v["fps"];
             // KFC_TRACE (diagnostics, e.g. grabar-audio.bat): more trace channels for the log.
             string extra = Environment.GetEnvironmentVariable("KFC_TRACE");
             env["RECOMP_TRACE"] = "title" + (string.IsNullOrEmpty(extra) ? "" : "," + extra);
-            env["RECOMP_DEBUG"] = "rt_alias_check=0,guest_cpus=" + v["cpu"];
+            // RECOMP_GUEST_CPUS: an env alias in the kungfuchaos fork, the only spelling in v0.15
+            // (where RECOMP_DEBUG=guest_cpus= is an unknown key and was ignored).
+            env["RECOMP_GUEST_CPUS"] = v["cpu"];
+            env["RECOMP_DEBUG"] = "rt_alias_check=0";
             try { Process.Start(psi); }
             catch (Exception e) {
                 MessageBox.Show(this, "Could not start the game:\n" + e.Message, "Kung Fu Chaos",
