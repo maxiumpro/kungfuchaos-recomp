@@ -78,7 +78,7 @@ toolkit also carries a reader for wired Xbox One controllers that SDL does not s
 similar ones, the GIP protocol through IOKit; `RECOMP_GIP=0` turns it off); it has not been tried yet with
 the controller in hand. The early-Z path for W depth is verified in Metal too: an in-run
 parity test (encodings alternating per frame, with a negative control) shows no image change, and on a MacBook
-Air M4 at render scale 3 (2880x2160), full screen, no MetalFX, a fight's GPU time per frame drops from about
+Air M4 at render scale 3 (1920x1440: 640x480 times 3), full screen, no MetalFX, a fight's GPU time per frame drops from about
 15.3 ms to 8.8 ms.
 
 ## Credits
