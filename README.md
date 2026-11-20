@@ -76,8 +76,10 @@ The launcher's banner and icon are made from your own screenshots if you put the
 The backend there is Metal. The launcher is in `launcher-mac/` (a SwiftUI app; see its README). The kfc-v2
 toolkit also carries a reader for wired Xbox One controllers that SDL does not see on macOS (Hyperkin and
 similar ones, the GIP protocol through IOKit; `RECOMP_GIP=0` turns it off); it has not been tried yet with
-the controller in hand. The early-Z path for W depth is written and compiles in Metal, but is unverified on a
-Mac (the D3D11 measurement did pass).
+the controller in hand. The early-Z path for W depth is verified in Metal too: an in-run
+parity test (encodings alternating per frame, with a negative control) shows no image change, and on a MacBook
+Air M4 at render scale 3 (2880x2160), full screen, no MetalFX, a fight's GPU time per frame drops from about
+15.3 ms to 8.8 ms.
 
 ## Credits
 
