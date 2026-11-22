@@ -4,11 +4,20 @@
 // Build: zsh build.sh   (swiftc -O -parse-as-library KFCLauncher.swift -o KFCLauncher)
 import SwiftUI
 import AppKit
+import CryptoKit
 
 let K = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Games/KFC")
 let tomlURL = K.appendingPathComponent("config.toml")
 let iniURL = K.appendingPathComponent("launcher.ini")
 let logURL = K.appendingPathComponent("log.txt")
+// Game Mode (KFC-1230): the game's own bundle, and the SHA-256 of the build/kfc_recomp it was made from.
+// The hash lives OUTSIDE the bundle: nothing may be written inside a signed .app, and codesign changes the
+// binary's bytes, so the bundle's copy never hashes like build/kfc_recomp.
+let gameBundleURL = K.appendingPathComponent("KFC Game.app")
+let gameBundleSrcURL = K.appendingPathComponent("KFC Game.app.src")
+// Built in a hidden work folder under its final .app name, then moved into place.
+let gameBundleNewDir = K.appendingPathComponent(".kfc-game-new")
+let gameBundleNewURL = gameBundleNewDir.appendingPathComponent("KFC Game.app")
 
 // MARK: - TOML (minimal, in place)
 
@@ -95,7 +104,7 @@ func updateToml(_ text: String, _ entries: [TomlEntry]) -> String {
 
 struct Config {
     // config.toml
-    var scale = 2
+    var scale = 4   // KFC-1650: 60 FPS at 4x on the M4 Air with the GPU kept busy (metal_gpu_spin)
     var aniso = 16
     var fullscreen = true
     var filter = "linear"
@@ -105,14 +114,40 @@ struct Config {
     var movie = "black"
     var overscan = 0
     // launcher.ini
-    var upscaler = "metalfx"
+    var upscaler = "linear"   // 4x is above the screen: nothing to upscale
     var progressive = true
-    var dsp = true
+    // Off by default (21-nov): with the DSP the fights measured ~2 dB louder but
+    // sounded practically the same blind, for ~4.5 ms more CPU a frame (KFC-1810).
+    var dsp = false
     var pads = 4
     var player = 1
     var rumble = true
     var fps = 60
-    var dof = "off"   // default: sharp background; "off": skip the depth-of-field repaint (RECOMP_DOF_SKIP)
+    var dof = "off"   // default: sharp background (19-nov); "off": skip the depth-of-field repaint (RECOMP_DOF_SKIP)
+    // On by default (21-nov, KFC-1105b): the combiners' fragments without discard_fragment where no
+    // kill can fire (metal_nodiscard=1) and with fast math (metal_fs_fastmath=1): the GPU a frame -55 % at
+    // 4x, 192 flips/s at 6x, no image change measured. To go back: fastshaders=0 in launcher.ini.
+    var fastShaders = true
+    // "sync" by default (KFC-2045, 21-nov): only the texture-decode sync drops a dirty render target whose
+    // memory the game already rewrote, instead of writing the stale target over the new texture (the bamboo
+    // in the forest came out as a purple/green mosaic). Everything else behaves as rt_alias_check=0
+    // (README:25). To go back: aliascheck=0 in launcher.ini.
+    var aliasCheck = "sync"
+    // "0" by default (KFC-0545b, 22-nov): the window's CAMetalLayer without display sync,
+    // so a frame goes to the screen as soon as it is drawn instead of waiting in the 3-drawable queue. Measured on
+    // the Air at 60: frame age 45.3 -> 4.1 ms, 0 repeated, 60 new frames/s. A torn image is not checked in depth,
+    // and the Metal HUD shows "Direct" only sometimes. To go back: vsync=1 in launcher.ini.
+    var vsync = "0"
+    // "1" by default (KFC-1015, 22-nov): the Metal translator's direct lookups (a texture-key hint
+    // before the cache scan, a table of combiner keys after the one-entry memo): -4.9 % of the translating thread's
+    // CPU at 60 (67 of 74 block pairs lower), -0.08 W, 0 differences in 3.9 M lookups. To go back: directcache=0.
+    var directCache = "1"
+    // "1" by default (KFC-1230, 22-nov): the game runs as the
+    // executable of its own bundle, KFC Game.app, with LSSupportsGameMode, so macOS turns Game Mode on; same
+    // fullscreen as before. To go back: gamemode=0 in launcher.ini.
+    var gameMode = "1"
+    // Off by default: Apple's Metal performance HUD in the game (MTL_HUD_ENABLED=1), for checking only.
+    var hud = false
 
     static func load() -> Config {
         var c = Config()
@@ -151,8 +186,14 @@ struct Config {
             if let v = d["pads"], let n = Int(v), (1...4).contains(n) { c.pads = n }
             if let v = d["player"], let n = Int(v), (1...4).contains(n) { c.player = n }
             if let v = d["rumble"], v == "1" || v == "0" { c.rumble = (v == "1") }
-            if let v = d["fps"], v == "60" || v == "120" { c.fps = Int(v) ?? 60 }
+            if let v = d["fps"], ["60", "120", "144", "240"].contains(v) { c.fps = Int(v) ?? 60 }
             if let v = d["dof"], v == "original" || v == "off" { c.dof = v }
+            if let v = d["fastshaders"], v == "1" || v == "0" { c.fastShaders = (v == "1") }
+            if let v = d["aliascheck"], v == "sync" || v == "0" { c.aliasCheck = v }
+            if let v = d["vsync"], v == "1" || v == "0" { c.vsync = v }
+            if let v = d["directcache"], v == "1" || v == "0" { c.directCache = v }
+            if let v = d["gamemode"], v == "1" || v == "0" { c.gameMode = v }
+            if let v = d["hud"], v == "1" || v == "0" { c.hud = (v == "1") }
         }
         return c
     }
@@ -183,6 +224,12 @@ struct Config {
             "rumble=" + (rumble ? "1" : "0"),
             "fps=" + String(fps),
             "dof=" + dof,
+            "fastshaders=" + (fastShaders ? "1" : "0"),
+            "aliascheck=" + aliasCheck,
+            "vsync=" + vsync,
+            "directcache=" + directCache,
+            "gamemode=" + gameMode,
+            "hud=" + (hud ? "1" : "0"),
         ].joined(separator: "\n") + "\n"
         try ini.write(to: iniURL, atomically: true, encoding: .utf8)
     }
@@ -201,7 +248,13 @@ struct Config {
         env["RECOMP_FB_WINDOW"] = "1"
         env["RECOMP_USB"] = "1"
         env["RECOMP_USB_NDP"] = "4"
-        env["RECOMP_DEBUG"] = "rt_alias_check=0"
+        // fastshaders (KFC-1105b): fastshaders=0 in launcher.ini goes back to the stock fragments.
+        // aliascheck (KFC-2045): aliascheck=0 in launcher.ini goes back to rt_alias_check=0.
+        // directcache (KFC-1015): directcache=0 in launcher.ini goes back to the plain cache scans.
+        env["RECOMP_DEBUG"] = "rt_alias_check=" + aliasCheck + (fastShaders ? ",metal_nodiscard=1,metal_fs_fastmath=1" : "")
+            + (directCache == "1" ? ",metal_direct_cache=1" : "")
+        // vsync (KFC-0545b): vsync=1 in launcher.ini goes back to the display-synced layer.
+        env["RECOMP_PRESENT_VSYNC"] = vsync
         env["RECOMP_CONFIG"] = tomlURL.path
         if upscaler == "metalfx" { env["RECOMP_METAL_UPSCALE"] = "metalfx" }
         env["RECOMP_KFC_PROGRESSIVE"] = progressive ? "1" : "0"
@@ -212,11 +265,118 @@ struct Config {
         env["RECOMP_RUMBLE"] = rumble ? "1" : "0"
         env["RECOMP_VBLANK_HZ"] = String(fps)
         if dof == "off" { env["RECOMP_DOF_SKIP"] = "320x240,64x64" }
+        if hud { env["MTL_HUD_ENABLED"] = "1" } else { env.removeValue(forKey: "MTL_HUD_ENABLED") }
         return env
     }
 }
 
+// MARK: - Game Mode bundle (KFC-1230)
+
+struct BundleError: LocalizedError {
+    let text: String
+    var errorDescription: String? { return text }
+}
+
+/// Runs a tool and waits for it; returns its exit status (-1 if it could not start).
+func runTool(_ path: String, _ args: [String]) -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: path)
+    p.arguments = args
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    do {
+        try p.run()
+    } catch {
+        return -1
+    }
+    p.waitUntilExit()
+    return p.terminationStatus
+}
+
+/// Makes sure ~/Games/KFC/KFC Game.app holds the current build/kfc_recomp, signed ad hoc.
+/// Returns nil when the bundle is ready, or the error text.
+func prepareGameBundle() -> String? {
+    let fm = FileManager.default
+    let src = K.appendingPathComponent("game-src/build/kfc_recomp")
+    let data: Data
+    let hash: String
+    do {
+        data = try Data(contentsOf: src, options: .mappedIfSafe)
+        hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    } catch {
+        return "could not read " + src.path + ": " + error.localizedDescription
+    }
+    // Up to date: same source hash, and the bundle's executable and Info.plist are there.
+    if fm.fileExists(atPath: gameBundleURL.path),
+       fm.fileExists(atPath: gameBundleURL.appendingPathComponent("Contents/MacOS/kfc_recomp").path),
+       fm.fileExists(atPath: gameBundleURL.appendingPathComponent("Contents/Info.plist").path),
+       let old = try? String(contentsOf: gameBundleSrcURL, encoding: .utf8),
+       trimmed(old) == hash {
+        return nil
+    }
+    do {
+        if fm.fileExists(atPath: gameBundleNewDir.path) { try fm.removeItem(at: gameBundleNewDir) }
+        let contents = gameBundleNewURL.appendingPathComponent("Contents")
+        let macos = contents.appendingPathComponent("MacOS")
+        try fm.createDirectory(at: macos, withIntermediateDirectories: true)
+        // The same bytes that were hashed, so the .src always matches the copy that was signed.
+        let exe = macos.appendingPathComponent("kfc_recomp")
+        try data.write(to: exe)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exe.path)
+        var info: [String: Any] = [
+            "CFBundleIdentifier": "com.github.maxiumpro.kfc.game",
+            "CFBundleName": "Kung Fu Chaos",
+            "CFBundleExecutable": "kfc_recomp",
+            "CFBundlePackageType": "APPL",
+            "CFBundleVersion": "1",
+            "CFBundleShortVersionString": "1.0",
+            "LSMinimumSystemVersion": "14.0",
+            "LSApplicationCategoryType": "public.app-category.action-games",
+            "LSSupportsGameMode": true,
+            "GCSupportsGameMode": true,
+            "NSHighResolutionCapable": true,
+        ]
+        // Optional icon: the launcher's own, when it has one. No icon is not an error.
+        if let iconFile = Bundle.main.infoDictionary?["CFBundleIconFile"] as? String,
+           let res = Bundle.main.resourceURL {
+            for name in [iconFile, iconFile + ".icns"] {
+                let icon = res.appendingPathComponent(name)
+                guard fm.fileExists(atPath: icon.path) else { continue }
+                let resources = contents.appendingPathComponent("Resources")
+                do {
+                    try fm.createDirectory(at: resources, withIntermediateDirectories: true)
+                    try fm.copyItem(at: icon, to: resources.appendingPathComponent(name))
+                    info["CFBundleIconFile"] = name
+                } catch {
+                    // No icon: the bundle works without one.
+                }
+                break
+            }
+        }
+        let plist = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try plist.write(to: contents.appendingPathComponent("Info.plist"))
+        // Extended attributes (e.g. on a copied icon) make codesign refuse the bundle.
+        _ = runTool("/usr/bin/xattr", ["-cr", gameBundleNewURL.path])
+        let signed = runTool("/usr/bin/codesign", ["--force", "-s", "-", gameBundleNewURL.path])
+        if signed != 0 { throw BundleError(text: "codesign exited with status " + String(signed)) }
+        let verified = runTool("/usr/bin/codesign", ["--verify", "--strict", gameBundleNewURL.path])
+        if verified != 0 { throw BundleError(text: "codesign --verify exited with status " + String(verified)) }
+        // Swap in the new bundle; the .src is written only once the bundle is in place.
+        if fm.fileExists(atPath: gameBundleURL.path) { try fm.removeItem(at: gameBundleURL) }
+        try fm.moveItem(at: gameBundleNewURL, to: gameBundleURL)
+        try? fm.removeItem(at: gameBundleNewDir)
+        try (hash + "\n").write(to: gameBundleSrcURL, atomically: true, encoding: .utf8)
+    } catch {
+        try? fm.removeItem(at: gameBundleNewDir)
+        return error.localizedDescription
+    }
+    return nil
+}
+
 // MARK: - Model
+
+/// True from PLAY until the game ends; read by AppDelegate so hiding the window doesn't quit the launcher.
+@MainActor var gameIsRunning = false
 
 @MainActor
 final class LauncherModel: ObservableObject {
@@ -224,6 +384,8 @@ final class LauncherModel: ObservableObject {
     @Published var running = false
     @Published var alertMessage: String? = nil
     private var hiddenWindows: [NSWindow] = []
+    private var autoPlayed = false
+    private var quitWhenGameEnds = false
 
     init() {
         if NSEvent.modifierFlags.contains(.option) {
@@ -254,14 +416,60 @@ final class LauncherModel: ObservableObject {
             alertMessage = "Could not save the settings:\n" + error.localizedDescription
             return
         }
+        let env = c.environment()
+        // Game Mode (KFC-1230): launch KFC Game.app through LaunchServices, so the process that makes the
+        // window is a bundle's executable with LSSupportsGameMode. With -W, open exits when the game does.
+        // If the bundle can't be made or open can't start, the plain binary below runs, as before.
+        var gameModeNote: String? = nil
+        if c.gameMode == "1" {
+            if let err = prepareGameBundle() {
+                gameModeNote = err
+            } else {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                // Start log.txt empty, as the plain-binary path does (open --stderr may append).
+                FileManager.default.createFile(atPath: logURL.path, contents: nil)
+                var args = ["-W", "-n", "-a", gameBundleURL.path, "--stderr", logURL.path]
+                for k in env.keys.sorted() where k.hasPrefix("RECOMP_") || k.hasPrefix("MTL_") || k.hasPrefix("SDL_") {
+                    args += ["--env", k + "=" + (env[k] ?? "")]
+                }
+                p.arguments = args
+                p.standardOutput = FileHandle.nullDevice
+                p.standardError = FileHandle.nullDevice
+                watchForGameEnd(p)
+                do {
+                    try p.run()
+                    gameStarted()
+                    return
+                } catch {
+                    gameModeNote = "open failed: " + error.localizedDescription
+                }
+            }
+        }
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         let logHandle = try? FileHandle(forWritingTo: logURL)
+        if let note = gameModeNote, let h = logHandle {
+            let line = "[launcher] Game Mode bundle not ready (" + note + "); running the plain binary\n"
+            try? h.write(contentsOf: Data(line.utf8))
+            _ = h.seekToEndOfFile()
+        }
         let p = Process()
         p.executableURL = exe
         p.currentDirectoryURL = build
-        p.environment = c.environment()
+        p.environment = env
         p.standardOutput = FileHandle.nullDevice
         if let h = logHandle { p.standardError = h }
+        watchForGameEnd(p)
+        do {
+            try p.run()
+        } catch {
+            alertMessage = "Could not start the game:\n" + error.localizedDescription
+            return
+        }
+        gameStarted()
+    }
+
+    private func watchForGameEnd(_ p: Process) {
         p.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -269,19 +477,37 @@ final class LauncherModel: ObservableObject {
                 }
             }
         }
-        do {
-            try p.run()
-        } catch {
-            alertMessage = "Could not start the game:\n" + error.localizedDescription
-            return
-        }
+    }
+
+    private func gameStarted() {
         running = true
+        gameIsRunning = true
         hiddenWindows = NSApp.windows.filter { $0.isVisible }
         for w in hiddenWindows { w.orderOut(nil) }
     }
 
+    /// --play (smoke test over SSH, like KFCLauncher.exe --play on Windows): press PLAY once at start,
+    /// and quit the launcher when the game ends.
+    func autoPlayIfAsked() {
+        guard !autoPlayed, CommandLine.arguments.contains("--play") else { return }
+        autoPlayed = true
+        quitWhenGameEnds = true
+        // One second later, so the launcher window is fully up before play() hides it: hiding it while it is
+        // still appearing counts as closing the last window, and the launcher quit (KFC-1230 smoke test).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.play()
+            }
+        }
+    }
+
     func gameEnded() {
         running = false
+        gameIsRunning = false
+        if quitWhenGameEnds {
+            NSApp.terminate(nil)
+            return
+        }
         for w in hiddenWindows { w.makeKeyAndOrderFront(nil) }
         hiddenWindows = []
         NSApp.activate(ignoringOtherApps: true)
@@ -310,12 +536,12 @@ struct ContentView: View {
                         Text("MetalFX (Apple)").tag("metalfx")
                         Text("Linear").tag("linear")
                     }
-                    .help("MetalFX (Apple) scales the image up to the screen with more sharpness; use it with an internal resolution below the screen's (2x on the MacBook Air).")
+                    .help("MetalFX (Apple) scales the image up to the screen with more sharpness; use it with an internal resolution below the screen's (2x or 3x on the MacBook Air).")
                     Picker("Window mode", selection: $model.c.fullscreen) {
                         Text("Fullscreen").tag(true)
                         Text("Window").tag(false)
                     }
-                    .help("Fullscreen is borderless, on the desktop's resolution.")
+                    .help("Fullscreen uses the screen's own resolution while the game is in front, and puts yours back when you leave.")
                     Picker("Upscaling filter", selection: $model.c.filter) {
                         Text("Smooth").tag("linear")
                         Text("Sharp pixels").tag("nearest")
@@ -368,9 +594,11 @@ struct ContentView: View {
                 Section("PERFORMANCE") {
                     Picker("Frame rate", selection: $model.c.fps) {
                         Text("60  (original)").tag(60)
-                        Text("120  (experimental)").tag(120)
+                        Text("120  (untested)").tag(120)
+                        Text("144  (untested)").tag(144)
+                        Text("240  (untested)").tag(240)
                     }
-                    .help("The game times itself, so it runs at normal speed at any rate; higher is smoother. Experimental above 60.")
+                    .help("60 is the original rate. Not tested above 60 on the Mac (game speed, sound and hits not checked yet). Above 60 only helps on an external monitor that refreshes that fast: the MacBook Air screen shows 60.")
                     Picker("Frame pacing", selection: $model.c.pacing) {
                         Text("Low CPU").tag("sleep")
                         Text("Exact timing").tag("spin")
@@ -378,6 +606,12 @@ struct ContentView: View {
                     .help("Low CPU sleeps between frames. Exact timing busy-waits, as the console did.")
                     Toggle("Accurate audio effects", isOn: $model.c.dsp)
                         .help("Reverb and echoes as the console had them. Uses a little more CPU.")
+                    Toggle("VSync", isOn: Binding(get: { model.c.vsync == "1" }, set: { model.c.vsync = $0 ? "1" : "0" }))
+                        .help("Off (default): each frame goes to the screen as soon as it is drawn, about 4 ms instead of about 45. On: waits for the screen's refresh; may avoid a rare torn line, with more input lag.")
+                    Toggle("Game Mode", isOn: Binding(get: { model.c.gameMode == "1" }, set: { model.c.gameMode = $0 ? "1" : "0" }))
+                        .help("On (default): the game runs as its own app (KFC Game.app in ~/Games/KFC) so macOS turns on Game Mode, which gives the game priority and lowers Bluetooth controller latency. The first match after a game update may stutter while shaders compile. Off: the game runs as before.")
+                    Toggle("Metal HUD", isOn: $model.c.hud)
+                        .help("Shows Apple's performance overlay in the game (frame rate, frame time, Direct or Composited). For checking only; the first match with it on may stutter while shaders compile.")
                 }
                 Section("CONTROLS") {
                     Picker("Controllers", selection: $model.c.pads) {
@@ -418,6 +652,7 @@ struct ContentView: View {
         .frame(width: 540, height: 780)
         .tint(accent)
         .preferredColorScheme(.dark)
+        .onAppear { model.autoPlayIfAsked() }
         .alert("Kung Fu Chaos", isPresented: Binding(
             get: { model.alertMessage != nil },
             set: { shown in if !shown { model.alertMessage = nil } }
@@ -437,7 +672,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true
+        // Not while a game runs: hiding the window when the plain binary starts counted as closing the last
+        // window, and the launcher quit 30 ms after the game started (KFC-1230 smoke test).
+        return !gameIsRunning
     }
 }
 

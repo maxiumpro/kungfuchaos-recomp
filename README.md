@@ -73,7 +73,8 @@ The launcher's banner and icon are made from your own screenshots if you put the
 
 ## Mac (Apple Silicon)
 
-The backend there is Metal. The launcher is in `launcher-mac/` (a SwiftUI app; see its README). The kfc-v2
+The backend there is Metal. The launcher is in `launcher-mac/` (a SwiftUI app; see its README). It runs the
+game as its own app bundle so macOS turns Game Mode on, and has toggles for VSync, Game Mode and the Metal HUD. The kfc-v2
 toolkit also carries a reader for wired Xbox One controllers that SDL does not see on macOS (Hyperkin and
 similar ones, the GIP protocol through IOKit; `RECOMP_GIP=0` turns it off); it has not been tried yet with
 the controller in hand. The early-Z path for W depth is verified in Metal too: an in-run
